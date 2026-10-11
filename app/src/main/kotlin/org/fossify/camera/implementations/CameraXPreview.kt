@@ -130,7 +130,7 @@ class CameraXPreview(
         object : OrientationEventListener(activity, SensorManager.SENSOR_DELAY_NORMAL) {
             @SuppressLint("RestrictedApi")
             override fun onOrientationChanged(orientation: Int) {
-                if (orientation == UNKNOWN_ORIENTATION) {
+                if (orientation == OrientationEventListener.ORIENTATION_UNKNOWN) {
                     return
                 }
 
@@ -142,6 +142,10 @@ class CameraXPreview(
                 }
 
                 if (lastRotation != rotation) {
+                    Log.i(
+                        SWITCH_TAG,
+                        "orientation raw=$orientation rotation=$rotation previous=$lastRotation"
+                    )
                     preview?.targetRotation = rotation
                     imageCapture?.targetRotation = rotation
                     videoCapture?.targetRotation = rotation
@@ -427,23 +431,46 @@ class CameraXPreview(
     }
 
     /**
-     * Width divided by height of the area that is actually captured, in the current display
-     * orientation. Zero means "leave the viewfinder shape alone", which is what the video mode
-     * uses because its preview can no longer be rebound either.
+     * True when the capture is rotated by a quarter turn relative to the app window.
+     *
+     * The activity is locked to portrait, so the window keeps ROTATION_0 while the capture
+     * rotation follows the orientation listener. Holding the phone in landscape therefore puts
+     * the capture a quarter turn away from the window.
+     */
+    private fun isCaptureQuarterTurnedFromDisplay(): Boolean {
+        val displayRotation = previewView.display?.rotation ?: Surface.ROTATION_0
+        val delta = (((lastRotation - displayRotation) % 4) + 4) % 4
+        return delta == 1 || delta == 3
+    }
+
+    /**
+     * Width divided by height of the viewfinder, expressed in the coordinates of the app window.
+     *
+     * The capture aspect ratio alone is not enough here. The window never rotates, but the preview
+     * stream is rendered rotated to the capture rotation reported by the orientation listener, so
+     * whenever the capture is a quarter turn away from the window - which is exactly what happens
+     * while the phone is held in landscape - the aspect has to be inverted for the viewfinder to
+     * line up with the region that actually gets saved.
+     *
+     * Zero means "leave the viewfinder shape alone", which is what the video mode uses because its
+     * preview can no longer be rebound either.
      */
     private fun previewAspectRatio(size: MySize): Float {
         if (!isPhotoCapture) {
             return 0f
         }
-        if (size.isFullScreen) {
-            val metrics = windowMetricsCalculator.computeCurrentWindowMetrics(activity).bounds
-            val width = metrics.width().toFloat()
-            val height = metrics.height().toFloat()
-            return if (isPortraitDisplay()) width / height else height / width
+        val metrics = windowMetricsCalculator.computeCurrentWindowMetrics(activity).bounds
+        val width = metrics.width().toFloat()
+        val height = metrics.height().toFloat()
+        val captureAspect = if (size.isFullScreen) {
+            // The full screen crop is defined by the window itself.
+            if (isPortraitDisplay()) width / height else height / width
+        } else {
+            val short = minOf(size.width, size.height).toFloat()
+            val long = maxOf(size.width, size.height).toFloat()
+            if (isPortraitDisplay()) short / long else long / short
         }
-        val short = minOf(size.width, size.height).toFloat()
-        val long = maxOf(size.width, size.height).toFloat()
-        return if (isPortraitDisplay()) short / long else long / short
+        return if (isCaptureQuarterTurnedFromDisplay()) 1f / captureAspect else captureAspect
     }
 
     private fun refreshPhotoAspectRatio() {
